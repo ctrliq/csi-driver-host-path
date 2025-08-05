@@ -23,6 +23,7 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -158,6 +159,7 @@ type state struct {
 	resources
 
 	statefilePath string
+	modTime       time.Time
 }
 
 var _ State = &state{}
@@ -188,6 +190,7 @@ func (s *state) dump() error {
 func (s *state) restore() error {
 	s.Volumes = nil
 	s.Snapshots = nil
+	s.GroupSnapshots = nil
 
 	data, err := os.ReadFile(s.statefilePath)
 	switch {
@@ -203,7 +206,29 @@ func (s *state) restore() error {
 	return nil
 }
 
+func (s *state) reload() error {
+	st, err := os.Stat(s.statefilePath) // ensure the file exists
+	if os.IsNotExist(err) {
+		// Nothing to reload.
+		return nil
+	} else if err != nil {
+		return status.Errorf(codes.Internal, "error getting state file status: %v", err)
+	}
+
+	if s.modTime.IsZero() || !s.modTime.Equal(st.ModTime()) {
+		s.modTime = st.ModTime()
+		return s.restore()
+	}
+
+	// No changes, nothing to do.
+	return nil
+}
+
 func (s *state) GetVolumeByID(volID string) (Volume, error) {
+	if err := s.reload(); err != nil {
+		return Volume{}, err
+	}
+
 	for _, volume := range s.Volumes {
 		if volume.VolID == volID {
 			return volume, nil
@@ -213,6 +238,10 @@ func (s *state) GetVolumeByID(volID string) (Volume, error) {
 }
 
 func (s *state) GetVolumeByName(volName string) (Volume, error) {
+	if err := s.reload(); err != nil {
+		return Volume{}, err
+	}
+
 	for _, volume := range s.Volumes {
 		if volume.VolName == volName {
 			return volume, nil
@@ -222,6 +251,8 @@ func (s *state) GetVolumeByName(volName string) (Volume, error) {
 }
 
 func (s *state) GetVolumes() []Volume {
+	_ = s.reload()
+
 	volumes := make([]Volume, len(s.Volumes))
 	copy(volumes, s.Volumes)
 	return volumes
@@ -249,6 +280,10 @@ func (s *state) DeleteVolume(volID string) error {
 }
 
 func (s *state) GetSnapshotByID(snapshotID string) (Snapshot, error) {
+	if err := s.reload(); err != nil {
+		return Snapshot{}, err
+	}
+
 	for _, snapshot := range s.Snapshots {
 		if snapshot.Id == snapshotID {
 			return snapshot, nil
@@ -258,6 +293,10 @@ func (s *state) GetSnapshotByID(snapshotID string) (Snapshot, error) {
 }
 
 func (s *state) GetSnapshotByName(name string) (Snapshot, error) {
+	if err := s.reload(); err != nil {
+		return Snapshot{}, err
+	}
+
 	for _, snapshot := range s.Snapshots {
 		if snapshot.Name == name {
 			return snapshot, nil
@@ -267,6 +306,8 @@ func (s *state) GetSnapshotByName(name string) (Snapshot, error) {
 }
 
 func (s *state) GetSnapshots() []Snapshot {
+	_ = s.reload()
+
 	snapshots := make([]Snapshot, len(s.Snapshots))
 	copy(snapshots, s.Snapshots)
 	return snapshots
@@ -294,6 +335,10 @@ func (s *state) DeleteSnapshot(snapshotID string) error {
 }
 
 func (s *state) GetGroupSnapshotByID(groupSnapshotID string) (GroupSnapshot, error) {
+	if err := s.reload(); err != nil {
+		return GroupSnapshot{}, err
+	}
+
 	for _, groupSnapshot := range s.GroupSnapshots {
 		if groupSnapshot.Id == groupSnapshotID {
 			return groupSnapshot, nil
@@ -303,6 +348,10 @@ func (s *state) GetGroupSnapshotByID(groupSnapshotID string) (GroupSnapshot, err
 }
 
 func (s *state) GetGroupSnapshotByName(name string) (GroupSnapshot, error) {
+	if err := s.reload(); err != nil {
+		return GroupSnapshot{}, err
+	}
+
 	for _, groupSnapshot := range s.GroupSnapshots {
 		if groupSnapshot.Name == name {
 			return groupSnapshot, nil
@@ -312,10 +361,10 @@ func (s *state) GetGroupSnapshotByName(name string) (GroupSnapshot, error) {
 }
 
 func (s *state) GetGroupSnapshots() []GroupSnapshot {
+	_ = s.reload()
+
 	groupSnapshots := make([]GroupSnapshot, len(s.GroupSnapshots))
-	for i, groupSnapshot := range s.GroupSnapshots {
-		groupSnapshots[i] = groupSnapshot
-	}
+	copy(groupSnapshots, s.GroupSnapshots)
 	return groupSnapshots
 }
 
