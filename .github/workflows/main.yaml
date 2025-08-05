@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  push-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build/Push to GitHub Container Registry
+        run:
+          make push-multiarch PULL_BASE_REF=$(git describe --tags --abbrev=0) REGISTRY_NAME=ghcr.io/ctrliq BUILD_PLATFORMS="linux amd64 amd64; linux arm64 arm64"

@@ -199,7 +199,7 @@ $(CMDS:%=push-multiarch-%): push-multiarch-%: check-pull-base-ref build-%
 			: "creating or overwriting canary image for release branch"; \
 			release_canary_tag=$$(echo $(PULL_BASE_REF) | cut -f2 -d '-')-canary; \
 			pushMultiArch $$release_canary_tag; \
-	elif docker pull $(IMAGE_NAME):$(PULL_BASE_REF) 2>&1 | tee /dev/stderr | grep -q "manifest for $(IMAGE_NAME):$(PULL_BASE_REF) not found"; then \
+	elif docker pull $(IMAGE_NAME):$(PULL_BASE_REF) 2>&1 | tee /dev/stderr | grep -q "manifest unknown"; then \
 			: "creating release image"; \
 			pushMultiArch $(PULL_BASE_REF); \
 	else \
