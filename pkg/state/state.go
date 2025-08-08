@@ -19,13 +19,13 @@ limitations under the License.
 package state
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"sort"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -177,15 +177,35 @@ func New(statefilePath string) (State, error) {
 	return s, s.restore()
 }
 
-func (s *state) dump() error {
+func (s *state) dump() (errFn error) {
 	data, err := json.Marshal(&s.resources)
 	if err != nil {
 		return status.Errorf(codes.Internal, "error encoding volumes and snapshots: %v", err)
 	}
-	if err := os.WriteFile(s.statefilePath, data, 0600); err != nil {
+
+	state, err := os.OpenFile(s.statefilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return status.Errorf(codes.Internal, "error opening state file: %v", err)
+	}
+	defer func() {
+		if errFn != nil {
+			_ = state.Close()
+		}
+	}()
+
+	err = unix.Flock(int(state.Fd()), unix.LOCK_EX)
+	if err != nil {
+		return status.Errorf(codes.Internal, "error locking state file: %v", err)
+	}
+	defer func() {
+		_ = unix.Flock(int(state.Fd()), unix.LOCK_UN)
+	}()
+
+	if _, err := state.Write(data); err != nil {
 		return status.Errorf(codes.Internal, "error writing state file: %v", err)
 	}
-	return nil
+
+	return state.Close()
 }
 
 func (s *state) restore() error {
@@ -193,25 +213,28 @@ func (s *state) restore() error {
 	s.Snapshots = nil
 	s.GroupSnapshots = nil
 
-	var data []byte
-	var err error
-
-	for range 10 {
-		data, err = os.ReadFile(s.statefilePath)
-		switch {
-		case errors.Is(err, os.ErrNotExist):
+	fd, err := os.Open(s.statefilePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			// Nothing to do.
 			return nil
-		case err != nil:
-			return status.Errorf(codes.Internal, "error reading state file: %v", err)
 		}
+		return status.Errorf(codes.Internal, "error reading state file: %v", err)
+	}
+	defer fd.Close()
 
-		data = bytes.ReplaceAll(data, []byte("\x00"), []byte(""))
-		if len(data) == 0 {
-			time.Sleep(100 * time.Millisecond) // wait for the file to be written
-			continue                           // try reading again
-		}
-		break
+	if err := unix.Flock(int(fd.Fd()), unix.LOCK_SH); err != nil {
+		return status.Errorf(codes.Internal, "error locking state file: %v", err)
+	}
+	defer unix.Flock(int(fd.Fd()), unix.LOCK_UN)
+
+	data, err := os.ReadFile(s.statefilePath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// Nothing to do.
+		return nil
+	case err != nil:
+		return status.Errorf(codes.Internal, "error reading state file: %v", err)
 	}
 
 	if err := json.Unmarshal(data, &s.resources); err != nil {
