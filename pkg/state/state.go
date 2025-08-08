@@ -19,6 +19,7 @@ limitations under the License.
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -192,17 +193,31 @@ func (s *state) restore() error {
 	s.Snapshots = nil
 	s.GroupSnapshots = nil
 
-	data, err := os.ReadFile(s.statefilePath)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		// Nothing to do.
-		return nil
-	case err != nil:
-		return status.Errorf(codes.Internal, "error reading state file: %v", err)
+	var data []byte
+	var err error
+
+	for range 10 {
+		data, err = os.ReadFile(s.statefilePath)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			// Nothing to do.
+			return nil
+		case err != nil:
+			return status.Errorf(codes.Internal, "error reading state file: %v", err)
+		}
+
+		data = bytes.ReplaceAll(data, []byte("\x00"), []byte(""))
+		if len(data) == 0 {
+			time.Sleep(100 * time.Millisecond) // wait for the file to be written
+			continue                           // try reading again
+		}
+		break
 	}
+
 	if err := json.Unmarshal(data, &s.resources); err != nil {
 		return status.Errorf(codes.Internal, "error encoding volumes and snapshots from state file %q: %v", s.statefilePath, err)
 	}
+
 	return nil
 }
 
