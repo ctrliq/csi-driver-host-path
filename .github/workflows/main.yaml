@@ -22,6 +22,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Build/Push to GitHub Container Registry
         run:
           make push-multiarch PULL_BASE_REF=$(git describe --tags --abbrev=0) REGISTRY_NAME=ghcr.io/ctrliq BUILD_PLATFORMS="linux amd64 amd64 -amd64; linux arm64 arm64 -arm64"
