@@ -120,7 +120,13 @@ func NewHostPathDriver(cfg Config) (*hostPath, error) {
 	klog.Infof("Driver: %v ", cfg.DriverName)
 	klog.Infof("Version: %s", cfg.VendorVersion)
 
-	s, err := state.New(path.Join(cfg.StateDir, "state.json"))
+	localStatefile := path.Join(cfg.StateDir, "local-state.json")
+	// specific to fuzzball environment variables
+	if os.Getenv("CSI_NODE_ID") != "" && os.Getenv("CSI_ENDPOINT") != "" {
+		localStatefile = "/csi-publish/local-state.json"
+	}
+
+	s, err := state.New(path.Join(cfg.StateDir, "state.json"), localStatefile, cfg.NodeID)
 	if err != nil {
 		return nil, err
 	}
