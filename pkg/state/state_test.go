@@ -30,8 +30,9 @@ var grpcError = status.Errorf(codes.NotFound, "not found")
 func TestVolumes(t *testing.T) {
 	tmp := t.TempDir()
 	statefileName := path.Join(tmp, "state.json")
+	localStatefileName := path.Join(tmp, "local-state.json")
 
-	s, err := New(statefileName)
+	s, err := New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "construct state")
 	require.Empty(t, s.GetVolumes(), "initial volumes")
 
@@ -39,13 +40,15 @@ func TestVolumes(t *testing.T) {
 	require.Equal(t, codes.NotFound, status.Convert(err).Code(), "GetVolumeByID of non-existent volume")
 	require.Contains(t, status.Convert(err).Message(), "foo")
 
-	err = s.UpdateVolume(Volume{VolID: "foo", VolName: "bar"})
+	err = s.UpdateVolume(Volume{VolID: "foo", VolName: "bar", LocalVolume: LocalVolume{Attached: true}})
 	require.NoError(t, err, "add volume")
 
-	s, err = New(statefileName)
+	s, err = New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "reconstruct state")
-	_, err = s.GetVolumeByID("foo")
+	vol, err := s.GetVolumeByID("foo")
 	require.NoError(t, err, "get existing volume by ID")
+	require.Equal(t, true, vol.Attached)
+
 	_, err = s.GetVolumeByName("bar")
 	require.NoError(t, err, "get existing volume by name")
 
@@ -61,8 +64,9 @@ func TestVolumes(t *testing.T) {
 func TestSnapshots(t *testing.T) {
 	tmp := t.TempDir()
 	statefileName := path.Join(tmp, "state.json")
+	localStatefileName := path.Join(tmp, "local-state.json")
 
-	s, err := New(statefileName)
+	s, err := New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "construct state")
 	require.Empty(t, s.GetSnapshots(), "initial snapshots")
 
@@ -73,7 +77,7 @@ func TestSnapshots(t *testing.T) {
 	err = s.UpdateSnapshot(Snapshot{Id: "foo", Name: "bar"})
 	require.NoError(t, err, "add snapshot")
 
-	s, err = New(statefileName)
+	s, err = New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "reconstruct state")
 	_, err = s.GetSnapshotByID("foo")
 	require.NoError(t, err, "get existing snapshot by ID")
@@ -94,8 +98,9 @@ func TestSnapshots(t *testing.T) {
 func TestSnapshotsFromSameSource(t *testing.T) {
 	tmp := t.TempDir()
 	statefileName := path.Join(tmp, "state.json")
+	localStatefileName := path.Join(tmp, "local-state.json")
 
-	s, err := New(statefileName)
+	s, err := New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "construct state")
 
 	err = s.UpdateSnapshot(Snapshot{Id: "foo", Name: "foo-name", VolID: "source"})
@@ -113,7 +118,7 @@ func TestSnapshotsFromSameSource(t *testing.T) {
 	require.NoError(t, err, "get existing snapshot by name 'bar-name'")
 
 	// Make sure it still works after reconstruction
-	s, err = New(statefileName)
+	s, err = New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "reconstruct state")
 	_, err = s.GetSnapshotByID("foo")
 	require.NoError(t, err, "get existing snapshot by ID 'foo'")
@@ -128,8 +133,9 @@ func TestSnapshotsFromSameSource(t *testing.T) {
 func TestVolumeGroupSnapshots(t *testing.T) {
 	tmp := t.TempDir()
 	statefileName := path.Join(tmp, "state.json")
+	localStatefileName := path.Join(tmp, "local-state.json")
 
-	s, err := New(statefileName)
+	s, err := New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "construct state")
 	require.Empty(t, s.GetGroupSnapshots(), "initial groupsnapshots")
 
@@ -140,7 +146,7 @@ func TestVolumeGroupSnapshots(t *testing.T) {
 	err = s.UpdateGroupSnapshot(GroupSnapshot{Id: "foo", Name: "bar"})
 	require.NoError(t, err, "add groupsnapshot")
 
-	s, err = New(statefileName)
+	s, err = New(statefileName, localStatefileName, "node1")
 	require.NoError(t, err, "reconstruct state")
 	_, err = s.GetGroupSnapshotByID("foo")
 	require.NoError(t, err, "get existing groupsnapshot by ID")

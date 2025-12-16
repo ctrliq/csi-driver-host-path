@@ -41,17 +41,7 @@ const (
 	BlockSizeBytes = 4096
 )
 
-type Volume struct {
-	VolName        string
-	VolID          string
-	VolSize        int64
-	VolPath        string
-	VolAccessType  AccessType
-	ParentVolID    string
-	ParentSnapID   string
-	Ephemeral      bool
-	NodeID         string
-	Kind           string
+type LocalVolume struct {
 	ReadOnlyAttach bool
 	Attached       bool
 	// Staged contains the staging target path at which the volume
@@ -61,6 +51,20 @@ type Volume struct {
 	// Published contains the target paths where the volume
 	// was published.
 	Published Strings
+}
+
+type Volume struct {
+	VolName       string
+	VolID         string
+	VolSize       int64
+	VolPath       string
+	VolAccessType AccessType
+	ParentVolID   string
+	ParentSnapID  string
+	Ephemeral     bool
+	NodeID        string
+	Kind          string
+	LocalVolume
 }
 
 type Snapshot struct {
@@ -156,11 +160,16 @@ type resources struct {
 	GroupSnapshots []GroupSnapshot
 }
 
+type localResources map[string]LocalVolume
+
 type state struct {
 	resources
+	localResources
 
-	statefilePath string
-	modTime       time.Time
+	statefilePath      string
+	modTime            time.Time
+	localStatefilePath string
+	nodeID             string
 }
 
 var _ State = &state{}
@@ -169,9 +178,12 @@ var _ State = &state{}
 // and then ensures that all changes are mirrored immediately in the
 // given file. If not given, the initial state is empty and changes
 // are not saved.
-func New(statefilePath string) (State, error) {
+func New(statefilePath string, localStatefilePath string, nodeID string) (State, error) {
 	s := &state{
-		statefilePath: statefilePath,
+		statefilePath:      statefilePath,
+		localStatefilePath: localStatefilePath,
+		nodeID:             nodeID,
+		localResources:     make(localResources),
 	}
 
 	return s, s.restore()
@@ -187,6 +199,18 @@ func (s *state) dump() (errFn error) {
 			errFn = state.Close()
 		} else {
 			_ = state.Close()
+		}
+	}()
+
+	localState, err := os.OpenFile(s.localStatefilePath, os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		return status.Errorf(codes.Internal, "error opening local state file: %v", err)
+	}
+	defer func() {
+		if errFn == nil {
+			errFn = localState.Close()
+		} else {
+			_ = localState.Close()
 		}
 	}()
 
@@ -207,6 +231,14 @@ func (s *state) dump() (errFn error) {
 		return status.Errorf(codes.Internal, "error encoding volumes and snapshots: %v", err)
 	}
 
+	if err := localState.Truncate(0); err != nil {
+		return status.Errorf(codes.Internal, "error truncating local state file: %v", err)
+	}
+
+	if err := json.NewEncoder(localState).Encode(&s.localResources); err != nil {
+		return status.Errorf(codes.Internal, "error encoding local resources: %v", err)
+	}
+
 	return nil
 }
 
@@ -225,13 +257,35 @@ func (s *state) restore() error {
 	}
 	defer state.Close()
 
+	localState, err := os.OpenFile(s.localStatefilePath, os.O_RDONLY, 0600)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return status.Errorf(codes.Internal, "error reading local state file: %v", err)
+		}
+	} else {
+		defer localState.Close()
+	}
+
 	if err := unix.Flock(int(state.Fd()), unix.LOCK_SH); err != nil {
 		return status.Errorf(codes.Internal, "error locking state file: %v", err)
 	}
 	defer unix.Flock(int(state.Fd()), unix.LOCK_UN)
 
 	if err := json.NewDecoder(state).Decode(&s.resources); err != nil {
-		return status.Errorf(codes.Internal, "error encoding volumes and snapshots from state file %q: %v", s.statefilePath, err)
+		return status.Errorf(codes.Internal, "error decoding volumes and snapshots from state file %q: %v", s.statefilePath, err)
+	}
+
+	if localState != nil {
+		if err := json.NewDecoder(localState).Decode(&s.localResources); err != nil {
+			return status.Errorf(codes.Internal, "error decoding local resources from state file %q: %v", s.localStatefilePath, err)
+		}
+	}
+
+	for i, vol := range s.Volumes {
+		if localVolume, ok := s.localResources[vol.VolID]; ok {
+			s.Volumes[i].LocalVolume = localVolume
+		}
+		s.Volumes[i].NodeID = s.nodeID
 	}
 
 	return nil
@@ -300,16 +354,19 @@ func (s *state) UpdateVolume(update Volume) error {
 	for i, volume := range s.Volumes {
 		if volume.VolID == update.VolID {
 			s.Volumes[i] = update
+			s.localResources[update.VolID] = update.LocalVolume
 			return s.dump()
 		}
 	}
 	s.Volumes = append(s.Volumes, update)
+	s.localResources[update.VolID] = update.LocalVolume
 	return s.dump()
 }
 
 func (s *state) DeleteVolume(volID string) error {
 	for i, volume := range s.Volumes {
 		if volume.VolID == volID {
+			delete(s.localResources, volID)
 			s.Volumes = append(s.Volumes[:i], s.Volumes[i+1:]...)
 			return s.dump()
 		}
